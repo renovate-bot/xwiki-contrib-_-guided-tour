@@ -104,6 +104,15 @@ const util = {
     }, selector);
   },
   /**
+   * Figure out if the given step should be considered a reflex step.
+   *
+   * @param step - the TourStep to check
+   * @returns true if the step should be treated as a reflex step (advancing on click), false otherwise
+   */
+  isReflex(step: TourStep): boolean {
+    return step.reflex && !!step.element;
+  },
+  /**
    *
    * @param callbackFn - The function to run to test if our goal has been achieved. Should return truthy if achieved,
    *     false otherwise (if we still need to wait)
@@ -147,7 +156,7 @@ const util = {
     guidedTourTask: TourTask,
     translations: Record<string, string>,
   ) {
-    if (step.reflex) {
+    if (util.isReflex(step)) {
       popDOM.footerButtons.removeChild(popDOM.nextButton);
       popDOM.footerButtons.removeChild(popDOM.previousButton);
     } else {
@@ -167,6 +176,7 @@ const util = {
     const stepOffset = direction == "next" ? 1 : -1;
     return guidedTourTask.steps?.[currentStepActiveIndex + stepOffset];
   },
+  // eslint-disable-next-line max-statements
   async moveToAdjacentStep(
     guidedTourTask: TourTask,
     guidedTourManager: DefaultGuidedTourManager,
@@ -204,6 +214,15 @@ const util = {
       StorageManager.getTaskCurrentStepStorageKey(guidedTourTask),
       adjacentStepIndex.toString(),
     );
+
+    // If the adjacent step is on another page, redirect to it. Reflex actions never redirect, since they might navigate
+    // on their own (e.g. "Save and view").
+    if (
+      !guidedTourTask.steps![currentStepActiveIndex].reflex &&
+      guidedTourManager.redirectToExpectedPage(adjacentStep)
+    ) {
+      return;
+    }
 
     // The `.drive()` method is overridden in xwiki to wait for elements to appear in the page, thus making it async (as
     // opposed to driver.js's default non-async method).
@@ -293,7 +312,16 @@ function XWikiDriverConfig(
         }
       }
     },
-    onNextClick: async () => {
+    onNextClick: async (element, _step, options) => {
+      const xwikiStep = guidedTourTask.steps![options.state.activeIndex!];
+      if (
+        util.isReflex(xwikiStep) &&
+        element instanceof HTMLElement &&
+        element.id !== "driver-dummy-element"
+      ) {
+        element.click();
+        return;
+      }
       await util.moveToAdjacentStep(guidedTourTask, guidedTourManager, "next");
     },
     onPrevClick: async () => {
@@ -447,7 +475,7 @@ function bindReflexEvents(
   },
 ) {
   console.debug("Doing reflex bind");
-  if (!step.reflex || element === undefined) {
+  if (!util.isReflex(step)) {
     if (step.reflex && element === undefined) {
       console.warn("WARNING: reflex step with empty element:", step);
     }
@@ -455,7 +483,7 @@ function bindReflexEvents(
   }
   const triggerCallback = () => {
     console.debug("Removing reflex listener on ", element);
-    element.removeEventListener("click", callback);
+    element!.removeEventListener("click", callback);
     callbackFn();
   };
   const callback = (event: Event) => {
@@ -472,7 +500,7 @@ function bindReflexEvents(
         .then(() => {
           console.debug("sloip awoked");
           if (
-            step.order != guidedTourManager.activeDriverTask?.getActiveIndex()
+            step.order == guidedTourManager.activeDriverTask?.getActiveIndex()
           ) {
             triggerCallback();
           }
@@ -484,7 +512,7 @@ function bindReflexEvents(
     }
   };
   console.debug("Adding reflex listener on ", element);
-  element.addEventListener("click", callback);
+  element!.addEventListener("click", callback);
 }
 
 // FIXME: From old TourJS.xml
